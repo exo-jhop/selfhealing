@@ -1,0 +1,43 @@
+# Laravel Cloud Configuration
+# https://cloud.laravel.com/docs
+
+type: laravel
+php: "8.2"
+nodejs: "20"
+
+# Build commands (run during deployment)
+build:
+  - composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+  - npm ci --prefer-offline --no-audit
+  - npm run build
+  - php artisan config:cache
+  - php artisan route:cache
+  - php artisan view:cache
+
+# Deploy commands (run after deployment)
+deploy:
+  - php artisan migrate --force --no-interaction
+
+# Health check
+health_check:
+  path: /up
+
+# Preview Environments — auto-created for every PR
+preview_environments:
+  enabled: true
+  on_pull_request: true
+  auto_deploy: true
+  run_migrations: true
+  auto_destroy: true
+  destroy_delay: 1h
+  environment:
+    APP_ENV: preview
+    APP_DEBUG: "true"
+    MAIL_MAILER: log
+    NIGHTWATCH_ENABLED: "false"
+
+# Environment variables
+environment:
+  APP_NAME: "Self-Healing Laravel"
+  LOG_CHANNEL: stack
+  LOG_LEVEL: info

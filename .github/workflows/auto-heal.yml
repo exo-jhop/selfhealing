@@ -1,0 +1,89 @@
+name: Auto-Heal Monitoring
+
+on:
+  schedule:
+    # Check every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      error_id:
+        description: 'Specific Nightwatch error ID to fix (optional)'
+        required: false
+
+jobs:
+  check-and-fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, json, pdo, sqlite3
+          coverage: none
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Check Nightwatch for recent errors
+        id: check_errors
+        env:
+          NIGHTWATCH_TOKEN: ${{ secrets.NIGHTWATCH_TOKEN }}
+        run: |
+          ERRORS=$(curl -sf \
+            -H "Authorization: Bearer $NIGHTWATCH_TOKEN" \
+            "https://nightwatch.laravel.com/api/exceptions?unresolved=true&limit=5" \
+            || echo "[]")
+
+          echo "errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          COUNT=$(echo "$ERRORS" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+          echo "error_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Found $COUNT unresolved error(s)"
+
+      - name: Run Claude Code to fix errors
+        if: steps.check_errors.outputs.error_count > 0
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          NIGHTWATCH_DATA: ${{ steps.check_errors.outputs.errors }}
+        run: |
+          npm install -g @anthropic-ai/claude-code
+
+          claude --print "
+          Nightwatch has detected unresolved production errors. Here is the error data:
+
+          $NIGHTWATCH_DATA
+
+          Please:
+          1. Read the stack trace and identify the root cause in the codebase
+          2. Write a minimal fix following the rules in .clinerules
+          3. Run php artisan test to verify all tests pass
+          4. Create a branch named fix/auto-nightwatch-{error-id}
+          5. Commit the fix with a descriptive message
+          6. Push the branch and open a GitHub PR using the pull_request_template
+
+          Only proceed with the PR if tests pass. If you cannot fix it safely, open a PR with [NEEDS REVIEW] in the title.
+          "
+
+      - name: Skip — no errors found
+        if: steps.check_errors.outputs.error_count == 0
+        run: echo "✅ No unresolved Nightwatch errors found."
